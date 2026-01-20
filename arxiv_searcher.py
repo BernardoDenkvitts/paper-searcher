@@ -7,6 +7,8 @@ from datetime import date, datetime
 from typing import List
 
 import arxiv
+from arxivql.taxonomy import categories_by_id
+from arxivql import Query, Taxonomy as T
 
 
 # Load configuration
@@ -41,71 +43,18 @@ MAXIMUM_KEYWORDS_ALLOWED = 12
 # All categories available in arxiv
 # Link https://arxiv.org/category_taxonomy
 ARXIV_CATEGORIES = {
-    "Computer Science": [
-        "cs.AI", "cs.AR", "cs.CC", "cs.CE", "cs.CG", "cs.CL", "cs.CR", "cs.CV",
-        "cs.CY", "cs.DB", "cs.DC", "cs.DL", "cs.DM", "cs.DS", "cs.ET", "cs.FL",
-        "cs.GL", "cs.GR", "cs.GT", "cs.HC", "cs.IR", "cs.IT", "cs.LG", "cs.LO",
-        "cs.MA", "cs.MM", "cs.MS", "cs.NA", "cs.NE", "cs.NI", "cs.OS",
-        "cs.PF", "cs.PL", "cs.RO", "cs.SC", "cs.SD", "cs.SE", "cs.SI", "cs.SY"
-    ],
-    "Mathematics": [
-        "math.AC", "math.AG", "math.AP", "math.AT", "math.CA", "math.CO",
-        "math.CT", "math.CV", "math.DG", "math.DS", "math.FA", "math.GM",
-        "math.GN", "math.GR", "math.GT", "math.HO", "math.IT", "math.KT",
-        "math.LO", "math.MG", "math.MP", "math.NA", "math.NT", "math.OA",
-        "math.OC", "math.PR", "math.QA", "math.RA", "math.RT", "math.SG",
-        "math.SP", "math.ST"
-    ],
+    "Computer Science": T.cs,
+    "Mathematics": T.math,
     "Physics": [
-        # physics archive
-        "physics.acc-ph", "physics.ao-ph", "physics.app-ph", "physics.atm-clus",
-        "physics.atom-ph", "physics.bio-ph", "physics.chem-ph", "physics.class-ph",
-        "physics.comp-ph", "physics.data-an", "physics.ed-ph", "physics.flu-dyn",
-        "physics.gen-ph", "physics.geo-ph", "physics.hist-ph", "physics.ins-det",
-        "physics.med-ph", "physics.optics", "physics.plasm-ph", "physics.pop-ph",
-        "physics.soc-ph", "physics.space-ph",
-
-        # High Energy Physics
-        "hep-ex", "hep-lat", "hep-ph", "hep-th",
-
-        # Mathematical Physics
-        "math-ph",
-
-        # Condensed Matter
-        "cond-mat.dis-nn", "cond-mat.mes-hall", "cond-mat.mtrl-sci",
-        "cond-mat.other", "cond-mat.quant-gas", "cond-mat.soft",
-        "cond-mat.stat-mech", "cond-mat.str-el", "cond-mat.supr-con",
-
-        # Astrophysics
-        "astro-ph.CO", "astro-ph.GA", "astro-ph.EP", "astro-ph.HE",
-        "astro-ph.IM", "astro-ph.SR",
-
-        # Other physics-related
-        "gr-qc", "quant-ph",
-
-        # Nonlinear sciences
-        "nlin.AO", "nlin.CD", "nlin.CG", "nlin.PS", "nlin.SI",
-
-        # Nuclear
-        "nucl-ex", "nucl-th"
+        T.astro_ph, T.cond_mat, T.gr_qc, T.hep_ex, T.hep_lat, 
+        T.hep_ph, T.hep_th, T.math_ph, T.nlin, T.nucl_ex, 
+        T.nucl_th, T.physics, T.quant_ph,
     ],
-    "Statistics": [
-        "stat.AP", "stat.CO", "stat.ME", "stat.ML", "stat.OT", "stat.TH"
-    ],
-    "Electrical Eng. & Systems Sci.": [
-        "eess.AS", "eess.IV", "eess.SP", "eess.SY"
-    ],
-    "Quantitative Biology": [
-        "q-bio.BM", "q-bio.CB", "q-bio.GN", "q-bio.MN", "q-bio.NC",
-        "q-bio.OT", "q-bio.PE", "q-bio.QM", "q-bio.SC", "q-bio.TO"
-    ],
-    "Quantitative Finance": [
-        "q-fin.CP", "q-fin.EC", "q-fin.GN", "q-fin.MF", "q-fin.PM",
-        "q-fin.PR", "q-fin.RM", "q-fin.ST", "q-fin.TR"
-    ],
-    "Economics": [
-        "econ.EM", "econ.GN", "econ.TH"
-    ]
+    "Statistics": T.stat,
+    "Electrical Eng. & Systems Sci.": T.eess,
+    "Quantitative Biology": T.q_bio,
+    "Quantitative Finance": T.q_fin,
+    "Economics": T.econ
 }
 
 
@@ -119,32 +68,39 @@ class Paper:
     updated: datetime
     link: str
     pdf_link: str
+    main_category: str
+    categories: List[str]
 
 
-def build_arxiv_query(keywords: List[str], category: str = "cs") -> str:
+def build_arxiv_query(keywords: List[str], category: str = "cs") -> Query:
     """
-    Build an arXiv search query using title/abstract fields to a specific arxiv category.
+    Build an arXiv search query using arxivql api.
 
     Args:
         keywords (List[str]): List of user-provided keywords or phrases.
-        operator (str): Boolean operator to combine keywords ('AND' or 'OR').
         category (str): High-level arXiv category key mapped to multiple subcategories.
     """
     
     if category not in ARXIV_CATEGORIES.keys():
         raise ValueError(f"Invalid arxiv category. Categories available: {ARXIV_CATEGORIES.keys()}") 
 
-    def clause(keyword: str) -> str:
-        kw = keyword.strip().replace('"', "")
-
-        # Quote multi-word keywords to ensure phrase matching in arXiv queries
-        # ti = title; abs = abstract
-        return f'(ti:"{kw}" OR abs:"{kw}")' if " " in kw else f'(ti:{kw} OR abs:{kw})'
+    # Each keyword must be in title OR abstract
+    keyword_query = None
+    for kw in keywords:
+        kw = kw.strip()
+        if not kw:
+            continue
+        # (ti:kw OR abs:kw)
+        clause = Query.title(kw) | Query.abstract(kw)
+        if keyword_query is None:
+            keyword_query = clause
+        else:
+            keyword_query &= clause
     
-    condition = " AND ".join(clause(kw) for kw in keywords if kw.strip())
+    # Categories: search in any of the mapped subcategories (OR)
     subcategories = ARXIV_CATEGORIES[category]
-    cat_condition = " OR ".join(f"cat:{sub}" for sub in subcategories)
-    return f'({cat_condition}) AND ({condition})'
+    category_query = Query.category(subcategories)
+    return category_query & keyword_query
 
 
 def search(keywords: str, start_date: datetime.date, end_date: datetime.date, sort_by: str, category: str) -> List[Paper]:
@@ -170,22 +126,21 @@ def search(keywords: str, start_date: datetime.date, end_date: datetime.date, so
     if len(keywords) > MAXIMUM_KEYWORDS_ALLOWED:
         raise ValueError(f"Too many keywords provided ({len(keywords)}). Maximum allowed is {MAXIMUM_KEYWORDS_ALLOWED}.")
 
-    start_date = start_date.strftime("%Y%m%d0000")
-    end_date = end_date.strftime("%Y%m%d2359")
-    date_range = f"AND submittedDate:[{start_date} TO {end_date}]"
-
-
     client = arxiv.Client()
     query = build_arxiv_query(keywords=keywords, category=category)
-    # Fetch papers for the query
-    query = f"{query} {date_range}"
+
+    # Add date filtering
+    query &= Query.submitted_date(start_date, end_date)
 
     logging.info(f"Keywords for filtering: {keywords}")
     logging.info(f"Date Range: {start_date} - {end_date}")
     logging.info(f"Query being used: {query}\n")
+    print(f"Query being used: {query}\n")
 
     search = arxiv.Search(
-        query=query, max_results=200, sort_by=arxiv.SortCriterion.Relevance if sort_by == "relevance" else arxiv.SortCriterion.SubmittedDate
+        query=str(query), 
+        max_results=200, 
+        sort_by=arxiv.SortCriterion.Relevance if sort_by == "relevance" else arxiv.SortCriterion.SubmittedDate
     )
 
     try:
@@ -199,6 +154,9 @@ def search(keywords: str, start_date: datetime.date, end_date: datetime.date, so
                 updated=result.updated,
                 link=result.entry_id,
                 pdf_link=result.pdf_url,
+                main_category=categories_by_id[result.primary_category].name,
+                # Uses arxivql api to get the category name
+                categories=[categories_by_id[cat].name for cat in result.categories]
             )
             for result in client.results(search)
         ]

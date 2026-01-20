@@ -23,12 +23,14 @@ The `search` function coordinates the process:
 class Paper:
     arxiv_id: str
     title: str
-    authors: List[str]
+    authors: List[str] 
     abstract: str
     published: datetime
     updated: datetime
     link: str
     pdf_link: str
+    main_category: str
+    categories: List[str]
 ```
 
 ## Web Interface (`streamlit_app.py`)

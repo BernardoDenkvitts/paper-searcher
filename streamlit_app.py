@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from arxiv_searcher import Paper, search, ARXIV_CATEGORIES
 
 st.set_page_config(
-    page_title="ArXiv Searcher", page_icon="📚", layout="centered"
+    page_title="Paper Explorer", page_icon="📚", layout="centered"
 )
 
 
@@ -50,7 +50,7 @@ DEFAULT_KEYWORDS = "large language models, multi-agent systems"
 if "search_results" not in st.session_state:
     st.session_state["search_results"] = {"papers": [], "searched": False}
 
-st.title("ArXiv Paper Search", anchor=False)
+st.title("Paper Discovery", anchor=False)
 
 st.markdown(
     '<div class="page-subtitle">Discover and explore research papers across the arXiv using keyword-based search</div>',
@@ -141,18 +141,21 @@ if (
     # Show each paper
     for paper in st.session_state["search_results"]["papers"]:
         paper_date = paper.published.strftime("%d/%m/%Y")
-        st.markdown(
-            f"""
-            <div class="paper-card">
-                <div class="paper-title">{paper.title}</div>
-                <div class="paper-metadata">
-                    <span class="metadata-item">📅 {paper_date}</span>
-                    <span class="metadata-item">🔗 <a href="{paper.link}">View on arXiv</a></span>
-                </div>
+        other_cats_html = "".join(f'<div class="paper-other-categories">{cat}</div>' for cat in paper.categories[1:])
+        
+        paper_html = f"""
+        <div class="paper-card">
+            <div class="paper-title">{paper.title}</div>
+            <div class="paper-categories">
+                <div class="paper-main-category">{paper.main_category}</div>{other_cats_html}
             </div>
-        """,
-            unsafe_allow_html=True,
-        )
+            <div class="paper-metadata">
+                <span class="metadata-item">📅 {paper_date}</span>
+                <span class="metadata-item">🔗 <a href="{paper.link}">View on arXiv</a></span>
+            </div>
+        </div>
+        """
+        st.markdown(paper_html, unsafe_allow_html=True)
 
         with st.expander("View details"):
             authors_str = ", ".join(paper.authors)

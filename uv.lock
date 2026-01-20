@@ -32,6 +32,15 @@ wheels = [
 ]
 
 [[package]]
+name = "arxivql"
+version = "1.3.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/d2/ad05be67197232881a03d2cc4befd4b0f9b950bfbc02cd61f8139d03a9ec/arxivql-1.3.3.tar.gz", hash = "sha256:3abb719681da089e4fa2de00f843be61d03ac06720bbde0f7748cb05a70568f6", size = 39078, upload-time = "2025-12-02T06:16:26.875Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/60/19f3def8da2da3769c149c4ac7b7dd7d3bfff047afdec8ba91e36c5dadf9/arxivql-1.3.3-py3-none-any.whl", hash = "sha256:a8926d199dea114fd1360be1289b08b80fb86f3d49f612375574f30aeefe56d0", size = 33295, upload-time = "2025-12-02T06:16:25.308Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "25.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -307,6 +316,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "arxiv" },
+    { name = "arxivql" },
     { name = "streamlit" },
 ]
 
@@ -318,6 +328,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "arxiv", specifier = ">=2.4.0" },
+    { name = "arxivql", specifier = ">=1.3.3" },
     { name = "streamlit", specifier = ">=1.52.2" },
 ]
 
