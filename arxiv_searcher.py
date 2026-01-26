@@ -139,7 +139,7 @@ def search(keywords: str, start_date: datetime.date, end_date: datetime.date, so
 
     search = arxiv.Search(
         query=str(query), 
-        max_results=200, 
+        max_results=1000, 
         sort_by=arxiv.SortCriterion.Relevance if sort_by == "relevance" else arxiv.SortCriterion.SubmittedDate
     )
 

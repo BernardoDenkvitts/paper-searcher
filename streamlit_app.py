@@ -6,7 +6,7 @@ import streamlit as st
 from datetime import date, timedelta
 
 from arxiv_searcher import Paper, search, ARXIV_CATEGORIES
-from preprocessing import preprocess_and_vectorize, get_2d_coordinates
+from preprocessing import preprocess_and_vectorize, get_2d_coordinates, get_top_k_words
 from sklearn.cluster import KMeans
 import numpy as np
 import plotly.express as px
@@ -50,9 +50,14 @@ def search_papers(
 def get_paper_clusters(papers: List[Paper]):
     """
     Perform clustering on a list of papers.
+    
+    Returns:
+        Tuple of (clusters_dict, top_words_dict)
+        - clusters_dict: {cluster_id: [papers]}
+        - top_words_dict: {cluster_id: [top_words]}
     """
     if not papers:
-        return {}
+        return {}, {}
         
     try:
         X = preprocess_and_vectorize(papers)
@@ -65,8 +70,10 @@ def get_paper_clusters(papers: List[Paper]):
             kmeans = KMeans(n_clusters=n_clusters, random_state=42)
             kmeans.fit(X)
             labels = kmeans.labels_
+            top_clusters_words = get_top_k_words(kmeans.cluster_centers_, top_k=3)
         else:
             labels = np.zeros(len(papers), dtype=int)
+            top_clusters_words = {}
 
         clusters = {}
         for idx, label in enumerate(labels):
@@ -75,12 +82,13 @@ def get_paper_clusters(papers: List[Paper]):
             clusters[label].append(papers[idx])
         
         # Sort clusters by label keys to ensure consistent order
-        return dict(sorted(clusters.items()))
+        sorted_clusters = dict(sorted(clusters.items()))
+        return sorted_clusters, top_clusters_words
     except Exception as e:
         # Log error in console but return a fallback
         print(f"Clustering error: {e}")
         logging.error(f"Clustering error: {e}")
-        return {0: papers}
+        return {0: papers}, {}
 
 
 ORDER_BY_OPTIONS = {
@@ -92,7 +100,7 @@ DEFAULT_KEYWORDS = "large language models, multi-agent systems"
 
 # Initialize session state
 if "search_results" not in st.session_state:
-    st.session_state["search_results"] = {"papers": [], "searched": False, "clusters": {}}
+    st.session_state["search_results"] = {"papers": [], "searched": False, "clusters": {}, "top_words": {}}
 
 st.title("Paper Discovery", anchor=False)
 
@@ -138,7 +146,7 @@ with col_end_date:
 
 with col_order_by:
     sort_option = st.selectbox(
-        "Order By", ORDER_BY_OPTIONS.keys(), help="Order applied to ArXiv search"
+        "Order By", ORDER_BY_OPTIONS.keys(), help="Order applied to arXiv search"
     )
 
 with col_search_bt:
@@ -164,7 +172,9 @@ if search_button:
             st.session_state["search_results"]["papers"] = papers
 
             if papers:
-                st.session_state["search_results"]["clusters"] = get_paper_clusters(papers)
+                clusters, top_words = get_paper_clusters(papers)
+                st.session_state["search_results"]["clusters"] = clusters
+                st.session_state["search_results"]["top_words"] = top_words
 
             st.session_state["search_results"]["searched"] = True
         except Exception as e:
@@ -185,7 +195,8 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
 
     # Show each paper
     clusters = st.session_state["search_results"].get("clusters")
-    
+    top_words = st.session_state["search_results"].get("top_words", {})
+
     is_first_paper = True
     # Flatten the clusters to match the dataframe indices
     ordered_papers = []
@@ -200,35 +211,60 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
     if show_viz:  
         if len(ordered_papers) > 2:
             try:
-                # TODO cache this
-                X_ordered = preprocess_and_vectorize(ordered_papers)
-                coords = get_2d_coordinates(X_ordered)
+                # Use Year and Cluster for visualization
+                years = [p.published.year for p in ordered_papers]
+                cluster_nums = [int(label) for label in all_labels]
+                
+                # Add jitter to avoid overlapping points since both axes are discrete
+                np.random.seed(42)
+                jitter_x = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
+                jitter_y = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
 
-                if coords is not None and len(coords) == len(ordered_papers):
-                    df_viz = pd.DataFrame({
-                        "x": coords[:, 0],
-                        "y": coords[:, 1],
-                        "Title": [p.title for p in ordered_papers],
-                        "Cluster": all_labels,
-                    })
-                    
-                    fig = px.scatter(
-                        df_viz, 
-                        x="x", y="y", 
-                        color="Cluster", 
-                        hover_data={"Title": True, "x": False, "y": False, "Cluster": True},
-                        title="Paper Clusters"
-                    )
-                    
-                    fig.update_layout(
-                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=''),
-                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, title=''),
-                        plot_bgcolor='rgba(0,0,0,0)'
-                    )
-                    
-                    st.plotly_chart(fig, width='stretch')
-                else:
-                    st.warning("Not enough variance to visualize clusters in 2D.")
+                df_viz = pd.DataFrame({
+                    "Year": years,
+                    "Cluster": [f"Cluster {l}" for l in all_labels],
+                    "x": np.array(years) + jitter_x,
+                    "y": np.array(cluster_nums) + jitter_y,
+                    "Title": [p.title for p in ordered_papers],
+                    "Date": [p.published.strftime("%Y-%m-%d") for p in ordered_papers]
+                })
+                
+                fig = px.scatter(
+                    df_viz, 
+                    x="x", y="y", 
+                    color="Cluster", 
+                    hover_data={
+                        "Title": True, 
+                        "Date": True,
+                        "Cluster": True,
+                        "x": False, 
+                        "y": False
+                    },
+                    title="Paper Clusters"
+                )
+                
+                # Format axes to show original categories (Years and Cluster IDs)
+                fig.update_layout(
+                    xaxis=dict(
+                        title="Year",
+                        tickmode='linear',
+                        dtick=1,
+                        showgrid=True,
+                        gridcolor='rgba(200, 200, 200, 0.2)'
+                    ),
+                    yaxis=dict(
+                        title="Cluster ID",
+                        tickmode='array',
+                        tickvals=list(range(len(clusters))),
+                        ticktext=[f"Cluster {i}" for i in range(len(clusters))],
+                        showgrid=True,
+                        gridcolor='rgba(200, 200, 200, 0.2)'
+                    ),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    hovermode="closest"
+                )
+
+                st.plotly_chart(fig, width='stretch')
             except Exception as e:
                 st.warning(f"Visualization failed")
                 logging.error(f"Visualization failed: {e}")
@@ -237,13 +273,16 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
 
     # Show papers by cluster
     tabs = st.tabs([f"Cluster {k}" for k in clusters.keys()])
+
     for i, tab in enumerate(tabs):
         with tab:
             cluster_id = list(clusters.keys())[i]
+            
+            st.markdown(f"<div class='results-count'>{len(clusters[cluster_id])} Papers in the cluster | Key terms: {', '.join(top_words[cluster_id])}</div>", unsafe_allow_html=True)
+
             for paper in clusters[cluster_id]:
                 paper_date = paper.published.strftime("%d/%m/%Y")
                 other_cats_html = "".join(f'<div class="paper-other-categories">{cat}</div>' for cat in paper.categories[1:])
-
 
                 paper_html = f"""
                 <div class="paper-card">
