@@ -1,12 +1,11 @@
 import logging
-import logging
 from pathlib import Path
 from typing import List
 import streamlit as st
 from datetime import date, timedelta
 
 from arxiv_searcher import Paper, search, ARXIV_CATEGORIES
-from preprocessing import preprocess_and_vectorize, get_2d_coordinates, get_top_k_words
+from preprocessing import preprocess_and_vectorize, get_top_k_words
 from sklearn.cluster import KMeans
 import numpy as np
 import plotly.express as px
@@ -46,8 +45,8 @@ def search_papers(
     )
 
 
-@st.cache_data(show_spinner=False)
-def get_paper_clusters(papers: List[Paper]):
+@st.cache_resource(show_spinner=False)
+def get_paper_clusters(papers: List[Paper], n_clusters: int = 1):
     """
     Perform clustering on a list of papers.
     
@@ -56,30 +55,24 @@ def get_paper_clusters(papers: List[Paper]):
         - clusters_dict: {cluster_id: [papers]}
         - top_words_dict: {cluster_id: [top_words]}
     """
-    if not papers:
-        return {}, {}
-        
+    if not papers or len(papers) < MIN_PAPERS_FOR_CLUSTERING:
+        return {0: papers}, {}
+    
+    if n_clusters > 10:
+        n_clusters = 10
+
     try:
         X = preprocess_and_vectorize(papers)
-        # 5 clusters, but at least 2 if possible, and not more than len(papers)
-        n_clusters = min(5, len(papers))
-        if n_clusters < 2 and len(papers) > 1:
-            n_clusters = 2
-        
-        if n_clusters > 1:
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-            kmeans.fit(X)
-            labels = kmeans.labels_
-            top_clusters_words = get_top_k_words(kmeans.cluster_centers_, top_k=3)
-        else:
-            labels = np.zeros(len(papers), dtype=int)
-            top_clusters_words = {}
-
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        kmeans.fit(X)
+        labels = kmeans.labels_
+        top_clusters_words = get_top_k_words(kmeans.cluster_centers_, top_k=3)
         clusters = {}
         for idx, label in enumerate(labels):
-            if label not in clusters:
-                clusters[label] = []
-            clusters[label].append(papers[idx])
+            label_int = int(label)
+            if label_int not in clusters:
+                clusters[label_int] = []
+            clusters[label_int].append(papers[idx])
         
         # Sort clusters by label keys to ensure consistent order
         sorted_clusters = dict(sorted(clusters.items()))
@@ -90,6 +83,65 @@ def get_paper_clusters(papers: List[Paper]):
         logging.error(f"Clustering error: {e}")
         return {0: papers}, {}
 
+
+def create_cluster_viz(ordered_papers: List[Paper], all_labels: List[str]):
+    # Use Year and Cluster for visualization
+    years = [p.published.year for p in ordered_papers]
+    cluster_nums = [int(label) for label in all_labels]
+    
+    # Add jitter to avoid overlapping points since both axes are discrete
+    np.random.seed(42)
+    jitter_x = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
+    jitter_y = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
+
+    df_viz = pd.DataFrame({
+        "Year": years,
+        "Cluster": [f"Cluster {label}" for label in all_labels],
+        "x": np.array(years) + jitter_x,
+        "y": np.array(cluster_nums) + jitter_y,
+        "Title": [p.title for p in ordered_papers],
+        "Date": [p.published.strftime("%Y-%m-%d") for p in ordered_papers]
+    })
+    
+    fig = px.scatter(
+        df_viz, 
+        x="x", y="y", 
+        color="Cluster", 
+        hover_data={
+            "Title": True, 
+            "Date": True,
+            "Cluster": True,
+            "x": False, 
+            "y": False
+        },
+        title="Paper Clusters"
+    )
+    
+    # Format axes to show original categories (Years and Cluster IDs)
+    fig.update_layout(
+        xaxis=dict(
+            title="Year",
+            tickmode='linear',
+            dtick=1,
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.2)'
+        ),
+        yaxis=dict(
+            title="Cluster ID",
+            tickmode='array',
+            tickvals=list(range(len(clusters))),
+            ticktext=[f"Cluster {i}" for i in range(len(clusters))],
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.2)'
+        ),
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode="closest"
+    )
+
+    return st.plotly_chart(fig, height=500)
+
+
+MIN_PAPERS_FOR_CLUSTERING = 10
 
 ORDER_BY_OPTIONS = {
     "Relevance": "relevance",
@@ -169,6 +221,7 @@ if search_button:
                 sort_opt=sort_option.lower(),
                 category_option=category_option,
             )
+
             st.session_state["search_results"]["papers"] = papers
 
             if papers:
@@ -179,7 +232,7 @@ if search_button:
             st.session_state["search_results"]["searched"] = True
         except Exception as e:
             if str(e) != "Error fetching papers":
-                st.error(f"⚠️ An error occurred")
+                st.error("⚠️ An error occurred")
                 logging.error(f"An error occurred: {e}")
             else:
                 st.warning("We couldn't fetch papers right now. Please try again in a few minutes.")
@@ -197,76 +250,39 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
     clusters = st.session_state["search_results"].get("clusters")
     top_words = st.session_state["search_results"].get("top_words", {})
 
-    is_first_paper = True
-    # Flatten the clusters to match the dataframe indices
-    ordered_papers = []
-    all_labels = []
-    
-    for label, p_list in clusters.items():
-        for p in p_list:
-            ordered_papers.append(p)
-            all_labels.append(str(label))
-    
-    show_viz = st.toggle("Show Cluster Visualization", value=True)
-    if show_viz:  
-        if len(ordered_papers) > 2:
+    col_toggle, col_slider, col_button = st.columns([1.5, 2, 1], vertical_alignment="center")
+    with col_toggle:
+        show_clusters = st.toggle("Show Clusters", value=True)
+
+    if show_clusters:  
+        with col_slider:
+            n_clusters = st.slider(
+                "Number of Clusters", 
+                min_value=1, 
+                max_value=10, 
+                value=len(clusters.keys())
+            )
+        
+        with col_button:
+            cluster_button = st.button("Cluster")
+            if cluster_button:
+                clusters, top_words = get_paper_clusters(st.session_state['search_results']['papers'], n_clusters)
+                st.session_state["search_results"]["clusters"] = clusters
+                st.session_state["search_results"]["top_words"] = top_words
+ 
+        if len(st.session_state['search_results']['papers']) >= MIN_PAPERS_FOR_CLUSTERING:
             try:
-                # Use Year and Cluster for visualization
-                years = [p.published.year for p in ordered_papers]
-                cluster_nums = [int(label) for label in all_labels]
-                
-                # Add jitter to avoid overlapping points since both axes are discrete
-                np.random.seed(42)
-                jitter_x = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
-                jitter_y = np.random.uniform(-0.3, 0.3, size=len(ordered_papers))
+                # Flatten the clusters to match the dataframe indices
+                ordered_papers = []
+                all_labels = []
+                for label, p_list in clusters.items():
+                    for p in p_list:
+                        ordered_papers.append(p)
+                        all_labels.append(str(label))
 
-                df_viz = pd.DataFrame({
-                    "Year": years,
-                    "Cluster": [f"Cluster {l}" for l in all_labels],
-                    "x": np.array(years) + jitter_x,
-                    "y": np.array(cluster_nums) + jitter_y,
-                    "Title": [p.title for p in ordered_papers],
-                    "Date": [p.published.strftime("%Y-%m-%d") for p in ordered_papers]
-                })
-                
-                fig = px.scatter(
-                    df_viz, 
-                    x="x", y="y", 
-                    color="Cluster", 
-                    hover_data={
-                        "Title": True, 
-                        "Date": True,
-                        "Cluster": True,
-                        "x": False, 
-                        "y": False
-                    },
-                    title="Paper Clusters"
-                )
-                
-                # Format axes to show original categories (Years and Cluster IDs)
-                fig.update_layout(
-                    xaxis=dict(
-                        title="Year",
-                        tickmode='linear',
-                        dtick=1,
-                        showgrid=True,
-                        gridcolor='rgba(200, 200, 200, 0.2)'
-                    ),
-                    yaxis=dict(
-                        title="Cluster ID",
-                        tickmode='array',
-                        tickvals=list(range(len(clusters))),
-                        ticktext=[f"Cluster {i}" for i in range(len(clusters))],
-                        showgrid=True,
-                        gridcolor='rgba(200, 200, 200, 0.2)'
-                    ),
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    hovermode="closest"
-                )
-
-                st.plotly_chart(fig, width='stretch')
+                create_cluster_viz(ordered_papers, all_labels)
             except Exception as e:
-                st.warning(f"Visualization failed")
+                st.warning("Visualization failed")
                 logging.error(f"Visualization failed: {e}")
         else:
             st.info("Not enough papers to visualize clusters.")
@@ -276,11 +292,10 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
 
     for i, tab in enumerate(tabs):
         with tab:
-            cluster_id = list(clusters.keys())[i]
-            
-            st.markdown(f"<div class='results-count'>{len(clusters[cluster_id])} Papers in the cluster | Key terms: {', '.join(top_words[cluster_id])}</div>", unsafe_allow_html=True)
+            if len(st.session_state['search_results']['papers']) >= MIN_PAPERS_FOR_CLUSTERING:
+                st.markdown(f"<div class='results-count'>{len(clusters[i])} Papers in the cluster | Key terms: {', '.join(top_words[i])}</div>", unsafe_allow_html=True)
 
-            for paper in clusters[cluster_id]:
+            for paper in clusters[i]:
                 paper_date = paper.published.strftime("%d/%m/%Y")
                 other_cats_html = "".join(f'<div class="paper-other-categories">{cat}</div>' for cat in paper.categories[1:])
 
@@ -298,7 +313,7 @@ if st.session_state["search_results"]["searched"] and st.session_state["search_r
                 """
                 st.markdown(paper_html, unsafe_allow_html=True)
 
-                with st.expander(f"View details"):
+                with st.expander("View details"):
                     authors_str = ", ".join(paper.authors)
                     st.markdown(
                         f"""
